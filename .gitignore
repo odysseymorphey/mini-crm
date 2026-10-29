@@ -1,0 +1,23 @@
+# Binaries
+/server
+*.exe
+*.out
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment and secrets
+.env
+*.local
+
+# IDE
+.idea/
+.vscode/
+
+# Coverage & test artifacts
+coverage.out
+*.test
+
+# Documents / specs
+*.pdf

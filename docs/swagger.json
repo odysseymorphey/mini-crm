@@ -1,0 +1,454 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Mini-CRM Task Management API",
+    "description": "REST API service for team task management with role-based access control, task history, Redis caching, and SQL analytics.",
+    "version": "1.0.0"
+  },
+  "basePath": "/",
+  "schemes": ["http"],
+  "securityDefinitions": {
+    "BearerAuth": {
+      "type": "apiKey",
+      "name": "Authorization",
+      "in": "header",
+      "description": "Format: Bearer <token>"
+    }
+  },
+  "paths": {
+    "/api/v1/register": {
+      "post": {
+        "summary": "Register a new user",
+        "tags": ["Auth"],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": ["email", "password", "name"],
+              "properties": {
+                "email": { "type": "string", "example": "alice@example.com" },
+                "password": { "type": "string", "example": "secret123" },
+                "name": { "type": "string", "example": "Alice Smith" }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "schema": { "$ref": "#/definitions/AuthResponse" }
+          },
+          "400": { "description": "Invalid input", "schema": { "$ref": "#/definitions/ErrorResponse" } },
+          "409": { "description": "Email already registered", "schema": { "$ref": "#/definitions/ErrorResponse" } }
+        }
+      }
+    },
+    "/api/v1/login": {
+      "post": {
+        "summary": "Authenticate user and get JWT",
+        "tags": ["Auth"],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": ["email", "password"],
+              "properties": {
+                "email": { "type": "string", "example": "alice@example.com" },
+                "password": { "type": "string", "example": "secret123" }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": { "$ref": "#/definitions/AuthResponse" }
+          },
+          "401": { "description": "Invalid credentials", "schema": { "$ref": "#/definitions/ErrorResponse" } }
+        }
+      }
+    },
+    "/api/v1/teams": {
+      "post": {
+        "summary": "Create a team (creator becomes owner)",
+        "tags": ["Teams"],
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": ["name"],
+              "properties": {
+                "name": { "type": "string", "example": "Alpha Team" }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "201": { "description": "Created", "schema": { "$ref": "#/definitions/Team" } },
+          "400": { "description": "Bad Request", "schema": { "$ref": "#/definitions/ErrorResponse" } },
+          "401": { "description": "Unauthorized", "schema": { "$ref": "#/definitions/ErrorResponse" } }
+        }
+      },
+      "get": {
+        "summary": "List teams for current user",
+        "tags": ["Teams"],
+        "security": [{ "BearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/TeamWithRole" }
+            }
+          },
+          "401": { "description": "Unauthorized", "schema": { "$ref": "#/definitions/ErrorResponse" } }
+        }
+      }
+    },
+    "/api/v1/teams/{id}/invite": {
+      "post": {
+        "summary": "Invite member to team (Owner or Admin only)",
+        "tags": ["Teams"],
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "type": "integer",
+            "required": true,
+            "description": "Team ID"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": ["role"],
+              "properties": {
+                "user_id": { "type": "integer", "example": 2 },
+                "email": { "type": "string", "example": "bob@example.com" },
+                "role": { "type": "string", "enum": ["admin", "member"], "example": "member" }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "201": { "description": "Created", "schema": { "$ref": "#/definitions/TeamMember" } },
+          "400": { "description": "Bad Request", "schema": { "$ref": "#/definitions/ErrorResponse" } },
+          "403": { "description": "Forbidden", "schema": { "$ref": "#/definitions/ErrorResponse" } },
+          "404": { "description": "User Not Found", "schema": { "$ref": "#/definitions/ErrorResponse" } },
+          "409": { "description": "User already in team", "schema": { "$ref": "#/definitions/ErrorResponse" } }
+        }
+      }
+    },
+    "/api/v1/teams/{team_id}/stats": {
+      "get": {
+        "summary": "Get team statistics & analytics report (Owner or Admin only)",
+        "tags": ["Analytics"],
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "type": "integer",
+            "required": true,
+            "description": "Team ID"
+          }
+        ],
+        "responses": {
+          "200": { "description": "OK", "schema": { "$ref": "#/definitions/TeamStats" } },
+          "401": { "description": "Unauthorized", "schema": { "$ref": "#/definitions/ErrorResponse" } },
+          "403": { "description": "Forbidden: not owner or admin", "schema": { "$ref": "#/definitions/ErrorResponse" } }
+        }
+      }
+    },
+    "/api/v1/tasks": {
+      "post": {
+        "summary": "Create a task in a team",
+        "tags": ["Tasks"],
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": ["team_id", "title"],
+              "properties": {
+                "team_id": { "type": "integer", "example": 1 },
+                "title": { "type": "string", "example": "Implement Auth Middleware" },
+                "description": { "type": "string", "example": "Add JWT token validation" },
+                "assignee_id": { "type": "integer", "example": 2 }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "201": { "description": "Created", "schema": { "$ref": "#/definitions/Task" } },
+          "400": { "description": "Invalid input / assignee not in team", "schema": { "$ref": "#/definitions/ErrorResponse" } },
+          "403": { "description": "Forbidden: not a team member", "schema": { "$ref": "#/definitions/ErrorResponse" } }
+        }
+      },
+      "get": {
+        "summary": "List team tasks with filters and pagination (Cached in Redis)",
+        "tags": ["Tasks"],
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          { "name": "team_id", "in": "query", "type": "integer", "required": true, "description": "Team ID" },
+          { "name": "status", "in": "query", "type": "string", "description": "Task status filter" },
+          { "name": "assignee_id", "in": "query", "type": "integer", "description": "Assignee ID filter" },
+          { "name": "limit", "in": "query", "type": "integer", "default": 20 },
+          { "name": "offset", "in": "query", "type": "integer", "default": 0 },
+          { "name": "cursor", "in": "query", "type": "integer", "description": "Cursor pagination (task ID after which to fetch)" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "schema": { "$ref": "#/definitions/TaskListResponse" } },
+          "400": { "description": "Missing team_id", "schema": { "$ref": "#/definitions/ErrorResponse" } },
+          "403": { "description": "Forbidden: not a team member", "schema": { "$ref": "#/definitions/ErrorResponse" } }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}": {
+      "put": {
+        "summary": "Update a task with role checks, optimistic locking and history recording",
+        "tags": ["Tasks"],
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "type": "integer", "required": true, "description": "Task ID" },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "title": { "type": "string", "example": "Updated Title" },
+                "description": { "type": "string", "example": "Updated Description" },
+                "status": { "type": "string", "enum": ["todo", "in_progress", "done", "closed"], "example": "in_progress" },
+                "assignee_id": { "type": "integer", "example": 2 },
+                "version": { "type": "integer", "example": 1, "description": "Current task version for optimistic locking" }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": { "description": "OK", "schema": { "$ref": "#/definitions/Task" } },
+          "400": { "description": "Invalid input", "schema": { "$ref": "#/definitions/ErrorResponse" } },
+          "403": { "description": "Forbidden", "schema": { "$ref": "#/definitions/ErrorResponse" } },
+          "404": { "description": "Not Found", "schema": { "$ref": "#/definitions/ErrorResponse" } },
+          "409": { "description": "Version conflict (concurrent update)", "schema": { "$ref": "#/definitions/ErrorResponse" } }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}/history": {
+      "get": {
+        "summary": "Get task changes history",
+        "tags": ["Tasks"],
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "type": "integer", "required": true, "description": "Task ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/TaskHistory" }
+            }
+          },
+          "403": { "description": "Forbidden", "schema": { "$ref": "#/definitions/ErrorResponse" } },
+          "404": { "description": "Not Found", "schema": { "$ref": "#/definitions/ErrorResponse" } }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}/comments": {
+      "post": {
+        "summary": "Add comment to a task",
+        "tags": ["Comments"],
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "type": "integer", "required": true, "description": "Task ID" },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": ["content"],
+              "properties": {
+                "content": { "type": "string", "example": "Ready for review" }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "201": { "description": "Created", "schema": { "$ref": "#/definitions/TaskComment" } },
+          "400": { "description": "Invalid input", "schema": { "$ref": "#/definitions/ErrorResponse" } },
+          "403": { "description": "Forbidden", "schema": { "$ref": "#/definitions/ErrorResponse" } }
+        }
+      },
+      "get": {
+        "summary": "List comments for a task",
+        "tags": ["Comments"],
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "type": "integer", "required": true, "description": "Task ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/TaskComment" }
+            }
+          },
+          "403": { "description": "Forbidden", "schema": { "$ref": "#/definitions/ErrorResponse" } }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "User": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "AuthResponse": {
+      "type": "object",
+      "properties": {
+        "token": { "type": "string" },
+        "user": { "$ref": "#/definitions/User" }
+      }
+    },
+    "Team": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "name": { "type": "string" },
+        "created_by": { "type": "integer" },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "TeamMember": {
+      "type": "object",
+      "properties": {
+        "team_id": { "type": "integer" },
+        "user_id": { "type": "integer" },
+        "role": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "TeamWithRole": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "name": { "type": "string" },
+        "created_by": { "type": "integer" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "user_role": { "type": "string" }
+      }
+    },
+    "Task": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "team_id": { "type": "integer" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "type": "string" },
+        "created_by": { "type": "integer" },
+        "assignee_id": { "type": "integer" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" },
+        "closed_at": { "type": "string", "format": "date-time" },
+        "version": { "type": "integer" }
+      }
+    },
+    "TaskListResponse": {
+      "type": "object",
+      "properties": {
+        "tasks": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Task" }
+        },
+        "total_count": { "type": "integer" },
+        "next_cursor": { "type": "integer" }
+      }
+    },
+    "TaskHistory": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "task_id": { "type": "integer" },
+        "changed_by": { "type": "integer" },
+        "changed_by_name": { "type": "string" },
+        "changes": { "type": "object" },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "TaskComment": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "task_id": { "type": "integer" },
+        "user_id": { "type": "integer" },
+        "user_name": { "type": "string" },
+        "content": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "StatusCount": {
+      "type": "object",
+      "properties": {
+        "status": { "type": "string" },
+        "count": { "type": "integer" }
+      }
+    },
+    "TopAssignee": {
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "integer" },
+        "name": { "type": "string" },
+        "closed_count": { "type": "integer" }
+      }
+    },
+    "TeamStats": {
+      "type": "object",
+      "properties": {
+        "team_id": { "type": "integer" },
+        "tasks_by_status": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/StatusCount" }
+        },
+        "top_3_assignees": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/TopAssignee" }
+        },
+        "avg_closing_time_seconds": { "type": "number" },
+        "total_comments": { "type": "integer" }
+      }
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "properties": {
+        "error": { "type": "string" }
+      }
+    }
+  }
+}
